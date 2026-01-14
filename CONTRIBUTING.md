@@ -4,15 +4,6 @@ Thank you for your interest in contributing to JSExtractor! 🎉
 
 ## How to Contribute
 
-### Reporting Bugs
-
-If you find a bug, please create an issue with:
-- Clear description of the problem
-- Steps to reproduce
-- Expected vs actual behavior
-- Your environment (OS, Python version)
-- Sample input (if applicable)
-
 ### Suggesting Features
 
 Have an idea? Create an issue with:
@@ -65,3 +56,4 @@ Feel free to open an issue for questions or discussions!
 ---
 
 Thank you for contributing to the security community! 🙏
+
