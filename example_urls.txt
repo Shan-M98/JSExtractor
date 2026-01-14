@@ -1,0 +1,16 @@
+# Example JS URLs File
+#
+# Instructions:
+# - Add one JavaScript URL per line
+# - Lines starting with # are ignored (comments)
+# - Make sure URLs are complete (include https://)
+#
+# Example URLs (replace with your actual targets):
+
+# https://example.com/static/js/app.js
+# https://example.com/static/js/vendor.js
+# https://cdn.example.com/assets/bundle.js
+# https://api.example.com/public/main.js
+
+# After creating your URL list, run:
+#   python js_recon.py your_urls.txt

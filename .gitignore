@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Scan results - don't commit scan data
+scans/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# User data files
+*.txt
+!requirements.txt
+!example_urls.txt
+
+# Temporary files
+tmp/
+temp/
+*.tmp
