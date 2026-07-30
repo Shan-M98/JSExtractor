@@ -811,12 +811,12 @@ def main():
         epilog="""
 Examples:
   python js_recon.py urls.txt
-  python js_recon.py urls.txt --domain ads.tiktok.com
+  python js_recon.py urls.txt --domain example.com
   python js_recon.py urls.txt --keep --workers 20
         """
     )
     parser.add_argument('urls_file', help='Text file containing JS URLs (one per line)')
-    parser.add_argument('--domain', help='Target domain to prepend to extracted paths (e.g. ads.tiktok.com)')
+    parser.add_argument('--domain', help='Target domain to prepend to extracted paths (e.g. example.com)')
     parser.add_argument('--keep', action='store_true', help='Keep downloaded JS files instead of deleting after scan')
     parser.add_argument('--workers', type=int, default=10, help='Number of concurrent download threads (default: 10)')
 

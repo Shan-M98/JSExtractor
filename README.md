@@ -115,7 +115,7 @@ cat scans/js_files_*/results/paths.txt
 
 ```bash
 # Prepend a domain to extracted paths for ready-to-test URLs
-python js_recon.py js_files.txt --domain ads.tiktok.com
+python js_recon.py js_files.txt --domain example.com
 ```
 
 ### Example 3: Iterative Deep Scan
