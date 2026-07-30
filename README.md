@@ -24,7 +24,7 @@
 - **Generates** a detailed REPORT.txt with all findings
 - **Discovers** additional JS files for iterative reconnaissance
 
-Perfect companion to [BurpJSCollector](https://github.com/yourusername/BurpJSCollector)!
+Perfect companion to [BurpJSCollector](https://github.com/Shan-M98/BurpJSCollector)!
 
 ## Key Features
 
@@ -71,7 +71,7 @@ Detects 145+ secret types with tuned regex patterns:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/JSExtractor.git
+git clone https://github.com/Shan-M98/JSExtractor.git
 cd JSExtractor
 
 # No dependencies required - uses Python standard library only
@@ -234,7 +234,7 @@ Output files (in scans/targets_2026-01-13_14-30-45/results):
 
 ## Perfect Companion Tools
 
-**[BurpJSCollector](https://github.com/yourusername/BurpJSCollector)** - Burp Suite extension to collect JS file URLs
+**[BurpJSCollector](https://github.com/Shan-M98/BurpJSCollector)** - Burp Suite extension to collect JS file URLs
 
 Complete workflow:
 1. Browse target with Burp + BurpJSCollector
@@ -277,7 +277,7 @@ If you use this tool commercially or create improvements/modifications:
 
 **Example Attribution:**
 ```
-This tool uses JSExtractor by Shan Majeed (https://github.com/yourusername/JSExtractor)
+This tool uses JSExtractor by Shan Majeed (https://github.com/Shan-M98/JSExtractor)
 Modified to add [your changes]
 ```
 
