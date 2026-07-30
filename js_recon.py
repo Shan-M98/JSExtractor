@@ -215,6 +215,51 @@ SECRET_PATTERNS = [
 ]
 
 
+# ── DOM-XSS sinks & sources ──────────────────────────────────────────────────
+# Dangerous JS constructs worth a manual look. "sink" = attacker-influenced data
+# reaching it can execute; "source" = attacker-controllable input. A source near
+# a sink in the same file is the classic client-side XSS lead.
+DOM_SINK_PATTERNS = [
+    ("sink", "eval()", re.compile(r'\beval\s*\(')),
+    ("sink", "new Function()", re.compile(r'\bnew\s+Function\s*\(')),
+    ("sink", "setTimeout/Interval with string", re.compile(r'\b(?:setTimeout|setInterval)\s*\(\s*[\'"]')),
+    ("sink", ".innerHTML =", re.compile(r'\.innerHTML\s*=')),
+    ("sink", ".outerHTML =", re.compile(r'\.outerHTML\s*=')),
+    ("sink", ".insertAdjacentHTML()", re.compile(r'\.insertAdjacentHTML\s*\(')),
+    ("sink", "document.write()", re.compile(r'document\.write(?:ln)?\s*\(')),
+    ("sink", "jQuery .html()", re.compile(r'\.html\s*\(')),
+    ("sink", "React dangerouslySetInnerHTML", re.compile(r'dangerouslySetInnerHTML')),
+    ("sink", "location assignment", re.compile(r'(?:document|window)?\.?location(?:\.href|\.replace)?\s*=\s*')),
+    ("source", "location.hash/search/href", re.compile(r'\blocation\.(?:hash|search|href)\b')),
+    ("source", "document.referrer", re.compile(r'\bdocument\.referrer\b')),
+    ("source", "window.name", re.compile(r'\bwindow\.name\b')),
+    ("source", "postMessage listener", re.compile(r'addEventListener\s*\(\s*[\'"]message[\'"]')),
+    ("source", "URLSearchParams", re.compile(r'\bURLSearchParams\b')),
+]
+
+# ── High-value endpoints (keyword → category) ────────────────────────────────
+# These are the paths/URLs a tester wants surfaced first, not buried in a flat list.
+INTERESTING_ENDPOINT_RULES = [
+    ("GraphQL", ['graphql', '/gql']),
+    ("API docs / Swagger", ['swagger', 'openapi', 'api-docs', 'apidocs', 'redoc', 'graphiql']),
+    ("Actuator / debug", ['actuator', '/debug', 'phpinfo', '/heapdump', '/threaddump', '/trace']),
+    ("Admin / console", ['/admin', '/administrator', '/console', '/manage', 'wp-admin', '/dashboard']),
+    ("Auth / tokens", ['/oauth', '/token', '/sso', '/saml', '/jwks', '.well-known', '/refresh']),
+    ("File upload / import", ['/upload', '/import', '/attachment', '/file']),
+    ("Internal / non-prod", ['/internal', '/private', '/dev/', '/staging', '/preprod']),
+    ("VCS / config exposure", ['/.git', '/.env', '/.svn', 'config.json', 'credentials', '/backup']),
+    ("Cloud metadata", ['169.254.169.254', 'metadata.google', 'metadata/instance', '/latest/meta-data']),
+    ("Payment / PII", ['/payment', '/billing', '/invoice', '/ssn', '/card']),
+]
+
+# Non-production / internal hostnames referenced in JS — often leak the real
+# infra behind the WAF/CDN.
+INTERNAL_HOST_PATTERN = re.compile(
+    r'https?://(?:[a-z0-9-]+\.)*'
+    r'(?:localhost|internal|intranet|corp|\.local|dev|stg|staging|uat|qa|sandbox|preprod|test)'
+    r'[a-z0-9.-]*(?::\d+)?', re.IGNORECASE)
+
+
 def normalize_url(url):
     """Normalize a URL by stripping default ports (:443 for https, :80 for http)."""
     url = re.sub(r'(https://[^/:]+):443(?=/|$)', r'\1', url)
@@ -388,6 +433,48 @@ class JSReconTool:
 
         return findings
 
+    def scan_dom_sinks(self, downloaded_files):
+        """Scan JS for DOM-XSS sinks/sources. Returns a list of findings with
+        file + line so the tester can jump straight to the interesting code."""
+        findings = []
+        seen = set()  # (file, line, label) — avoid flooding on minified lines
+        for file_info in downloaded_files:
+            try:
+                with open(file_info['path'], 'r', encoding='utf-8', errors='ignore') as f:
+                    for line_num, line in enumerate(f, 1):
+                        for kind, label, pattern in DOM_SINK_PATTERNS:
+                            if pattern.search(line):
+                                key = (file_info['path'], line_num, label)
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                snippet = line.strip()
+                                if len(snippet) > 160:
+                                    snippet = snippet[:160] + "..."
+                                findings.append({
+                                    'kind': kind, 'label': label, 'snippet': snippet,
+                                    'source_url': normalize_url(file_info['url']),
+                                    'line': line_num,
+                                })
+            except Exception as e:
+                print(f"[!] {type(e).__name__} scanning sinks in {file_info['path']}: {e}")
+        return findings
+
+    def find_interesting(self, all_urls, all_paths):
+        """Classify extracted URLs/paths into high-value buckets and pull out any
+        internal/non-prod hostnames. Returns (endpoints_by_category, internal_hosts)."""
+        endpoints = defaultdict(set)
+        for item in list(all_urls) + list(all_paths):
+            low = item.lower()
+            for category, needles in INTERESTING_ENDPOINT_RULES:
+                if any(n in low for n in needles):
+                    endpoints[category].add(item)
+        internal_hosts = set()
+        for url in all_urls:
+            for m in INTERNAL_HOST_PATTERN.finditer(url):
+                internal_hosts.add(m.group(0))
+        return endpoints, internal_hosts
+
     def categorize_urls(self, urls):
         """Categorize URLs by type"""
         categories = {
@@ -544,7 +631,7 @@ class JSReconTool:
 
         return all_urls, all_paths, url_categories, path_categories, all_js_files, output_paths
 
-    def generate_report(self, downloaded_files, secrets, all_urls, all_paths, url_categories, path_categories, all_js_files, output_paths):
+    def generate_report(self, downloaded_files, secrets, all_urls, all_paths, url_categories, path_categories, all_js_files, output_paths, dom_sinks, interesting_endpoints, internal_hosts):
         """Generate a single comprehensive REPORT.txt"""
         report_file = self.results_dir / "REPORT.txt"
 
@@ -562,11 +649,15 @@ class JSReconTool:
             f.write("SCAN SUMMARY\n")
             f.write("-" * 80 + "\n\n")
 
-            f.write(f"  Files downloaded:      {len(downloaded_files)}\n")
-            f.write(f"  Secrets found:         {len(secrets)}\n")
+            interesting_count = sum(len(v) for v in interesting_endpoints.values())
+            f.write(f"  Files downloaded:       {len(downloaded_files)}\n")
+            f.write(f"  Secrets found:          {len(secrets)}\n")
+            f.write(f"  High-value endpoints:   {interesting_count}\n")
+            f.write(f"  Internal/non-prod hosts:{len(internal_hosts)}\n")
+            f.write(f"  DOM-XSS sinks/sources:  {len(dom_sinks)}\n")
             f.write(f"  Unique URLs extracted:  {len(all_urls)}\n")
             f.write(f"  Unique paths extracted: {len(all_paths)}\n")
-            f.write(f"  JS files (total):      {len(all_js_files)}\n")
+            f.write(f"  JS files (total):       {len(all_js_files)}\n")
 
             # Domains scanned
             domains = defaultdict(int)
@@ -575,6 +666,39 @@ class JSReconTool:
             f.write(f"\n  Domains scanned ({len(domains)}):\n")
             for domain, count in sorted(domains.items()):
                 f.write(f"    {domain}: {count} files\n")
+
+            # ── PRIORITY FINDINGS (triage first) ──
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("PRIORITY FINDINGS  (look here first)\n")
+            f.write("=" * 80 + "\n\n")
+            any_priority = False
+            if secrets:
+                any_priority = True
+                sev_types = sorted(set(s['type'] for s in secrets))
+                f.write(f"  [CRITICAL] {len(secrets)} potential secret(s) across {len(sev_types)} type(s):\n")
+                f.write(f"             {', '.join(sev_types)}\n\n")
+            if internal_hosts:
+                any_priority = True
+                f.write(f"  [HIGH] {len(internal_hosts)} internal / non-production host(s) referenced:\n")
+                for h in sorted(internal_hosts):
+                    f.write(f"           {h}\n")
+                f.write("\n")
+            if interesting_endpoints:
+                any_priority = True
+                f.write(f"  [HIGH] High-value endpoints by category:\n")
+                for category, items in sorted(interesting_endpoints.items()):
+                    f.write(f"           {category} ({len(items)}):\n")
+                    for it in sorted(items):
+                        f.write(f"             {it}\n")
+                f.write("\n")
+            if dom_sinks:
+                any_priority = True
+                sinks = [d for d in dom_sinks if d['kind'] == 'sink']
+                sources = [d for d in dom_sinks if d['kind'] == 'source']
+                f.write(f"  [MEDIUM] {len(sinks)} DOM sink(s) and {len(sources)} source(s) - review for client-side XSS.\n")
+                f.write(f"           (full list in the DOM-XSS section below)\n\n")
+            if not any_priority:
+                f.write("  Nothing high-signal surfaced automatically. Review the full sections below.\n")
 
             # ── SECRETS ──
             f.write("\n" + "=" * 80 + "\n")
@@ -641,6 +765,25 @@ class JSReconTool:
                             f.write(f"    {path}\n")
                     f.write("\n")
 
+            # ── DOM-XSS SINKS & SOURCES ──
+            f.write("=" * 80 + "\n")
+            f.write("DOM-XSS SINKS & SOURCES\n")
+            f.write("=" * 80 + "\n\n")
+            if dom_sinks:
+                f.write(f"  {len(dom_sinks)} occurrence(s). A source feeding a sink in the same file is a lead.\n\n")
+                sinks_by_url = defaultdict(list)
+                for d in dom_sinks:
+                    sinks_by_url[d['source_url']].append(d)
+                for url in sorted(sinks_by_url):
+                    f.write(f"  {url}\n")
+                    for d in sorted(sinks_by_url[url], key=lambda x: x['line']):
+                        tag = d['kind'].upper()
+                        f.write(f"    L{d['line']:<6} [{tag}] {d['label']}\n")
+                        f.write(f"            {d['snippet']}\n")
+                    f.write("\n")
+            else:
+                f.write("  No DOM-XSS sinks or sources detected.\n\n")
+
             # ── DISCOVERED JS FILES ──
             f.write("=" * 80 + "\n")
             f.write("DISCOVERED JS FILES\n")
@@ -702,6 +845,14 @@ Examples:
     # Extract URLs and paths
     all_urls, all_paths, url_categories, path_categories, all_js_files, output_paths = tool.extract_urls_and_paths(downloaded_files)
 
+    # Intelligence pass: DOM-XSS sinks/sources + high-value endpoints + internal hosts
+    print(f"\n[*] Analysing for DOM-XSS sinks and high-value endpoints...")
+    dom_sinks = tool.scan_dom_sinks(downloaded_files)
+    interesting_endpoints, internal_hosts = tool.find_interesting(all_urls, all_paths)
+    print(f"[+] {len(dom_sinks)} DOM sink/source hit(s), "
+          f"{sum(len(v) for v in interesting_endpoints.values())} high-value endpoint(s), "
+          f"{len(internal_hosts)} internal host(s)")
+
     # Clean up downloaded JS files (unless --keep)
     if args.keep:
         print(f"\n[*] Keeping downloaded JS files in: {tool.downloaded_dir}")
@@ -711,7 +862,7 @@ Examples:
 
     # Generate single comprehensive report
     print("\n[*] Generating report...")
-    report_file = tool.generate_report(downloaded_files, secrets, all_urls, all_paths, url_categories, path_categories, all_js_files, output_paths)
+    report_file = tool.generate_report(downloaded_files, secrets, all_urls, all_paths, url_categories, path_categories, all_js_files, output_paths, dom_sinks, interesting_endpoints, internal_hosts)
     print(f"[+] Report: {report_file}")
 
     # Console summary
@@ -725,12 +876,18 @@ Examples:
     print(f"Paths Extracted: {len(all_paths)}")
     print(f"JS Files Total:  {len(all_js_files)}")
 
-    if url_categories['api_endpoints']:
-        print(f"  - API Endpoints: {len(url_categories['api_endpoints'])}")
-    if path_categories['admin_paths']:
-        print(f"  - Admin Paths: {len(path_categories['admin_paths'])}")
-    if path_categories['auth_paths']:
-        print(f"  - Auth Paths: {len(path_categories['auth_paths'])}")
+    # Priority highlights — the reason to open the report
+    if secrets:
+        print(f"\n  [CRITICAL] {len(secrets)} potential secret(s)")
+    if internal_hosts:
+        print(f"  [HIGH] {len(internal_hosts)} internal/non-prod host(s)")
+    if interesting_endpoints:
+        print(f"  [HIGH] {sum(len(v) for v in interesting_endpoints.values())} high-value endpoint(s): "
+              f"{', '.join(sorted(interesting_endpoints.keys()))}")
+    if dom_sinks:
+        n_sink = len([d for d in dom_sinks if d['kind'] == 'sink'])
+        n_src = len([d for d in dom_sinks if d['kind'] == 'source'])
+        print(f"  [MEDIUM] {n_sink} DOM sink(s), {n_src} source(s) — client-side XSS leads")
 
     print(f"\nOutput files (in {tool.results_dir}):")
     print(f"  REPORT.txt   - Full scan report")
